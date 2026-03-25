@@ -1,0 +1,687 @@
+// Simple browser-based water balloon battle game for kids or anyone who wants to play
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>Water Balloon Battle</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <style>
+        body { 
+            margin: 0; padding: 0; background-color: #111; 
+            display: flex; justify-content: center; align-items: center; 
+            height: 100vh; overflow: hidden; font-family: 'Comic Sans MS', sans-serif; 
+            touch-action: none; user-select: none; -webkit-user-select: none;
+        }
+        canvas { 
+            display: block; box-shadow: 0 0 30px rgba(100, 200, 255, 0.4); 
+            border-radius: 10px; touch-action: none; 
+        }
+    </style>
+</head>
+<body>
+<script>
+    // Set up the audio context for playing sounds
+    let audioCtx = null;
+    const audioCache = {};
+    const gameSettings = {
+        musicVolume: 0.5, // Default music volume
+        sfxVolume: 1.0,  // Default sound effects volume
+        musicEnabled: true, // Toggle for background music
+        sfxEnabled: true   // Toggle for sound effects
+    };
+    
+    // Create the audio context if it doesn't exist yet
+    async function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        return audioCtx;
+    }
+    
+    // Load an audio file and store it in the cache
+    async function loadAudioFile(name, path) {
+        try {
+            const response = await fetch(path);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            audioCache[name] = audioBuffer;
+            return audioBuffer;
+        } catch (e) {
+            console.error(`Couldn't load audio file: ${path}`, e);
+            return null;
+        }
+    }
+    
+    // Play audio with volume control
+    function playAudio(name, volume = 1.0) {
+        if (audioCache[name] && audioCtx && gameSettings.sfxEnabled) {
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioCache[name];
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = volume * gameSettings.sfxVolume;
+            source.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            source.start(0);
+            return source;
+        }
+    }
+    
+    // Sound effect library with audio file support
+    const sfx = {
+        swoosh: (volume = 1.0) => playAudio('swoosh', volume),
+        splash: (volume = 1.0) => playAudio('splash', volume),
+        giggle: (volume = 1.0) => playAudio('giggle', volume),
+        cheer: (volume = 1.0) => playAudio('cheer', volume),
+        playMusic: (volume = 0.5) => {
+            if (audioCache['music'] && audioCtx && gameSettings.musicEnabled) {
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioCache['music'];
+                source.loop = true;
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = volume * gameSettings.musicVolume;
+                source.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                source.start(0);
+                audioCtx.musicSource = source;
+                audioCtx.musicGain = gainNode;
+                return source;
+            }
+        },
+        stopMusic: () => {
+            if (audioCtx && audioCtx.musicSource) {
+                try {
+                    audioCtx.musicSource.stop();
+                } catch (e) {}
+                audioCtx.musicSource = null;
+            }
+        },
+        setMusicVolume: (volume) => {
+            gameSettings.musicVolume = Math.max(0, Math.min(1, volume));
+            if (audioCtx && audioCtx.musicGain) {
+                audioCtx.musicGain.gain.value = gameSettings.musicVolume;
+            }
+        },
+        setSFXVolume: (volume) => {
+            gameSettings.sfxVolume = Math.max(0, Math.min(1, volume));
+        }
+    };
+
+
+    // Game Save Data Manager
+    class DataManager {
+        constructor() { this.data = this.load(); }
+        save() { try { localStorage.setItem('magicalWaterBalloonBattleData', JSON.stringify(this.data)); } catch (e) {} }
+        load() {
+            try { const d = localStorage.getItem('magicalWaterBalloonBattleData'); if (d) return JSON.parse(d); } catch (e) {}
+            return { sparkleStars: 0, musicVolume: 0.5, sfxVolume: 1.0 };
+        }
+        addStars(amount) { this.data.sparkleStars += amount; this.save(); }
+        getStars() { return this.data.sparkleStars; }
+        saveSettings() { this.data.musicVolume = gameSettings.musicVolume; this.data.sfxVolume = gameSettings.sfxVolume; this.save(); }
+        loadSettings() { if (this.data.musicVolume !== undefined) gameSettings.musicVolume = this.data.musicVolume; if (this.data.sfxVolume !== undefined) gameSettings.sfxVolume = this.data.sfxVolume; }
+    }
+    const dataManager = new DataManager();
+
+    class Preloader extends Phaser.Scene {
+        constructor() { super('Preloader'); }
+        async preload() {
+            await initAudio();
+            // Load audio files
+            const audioFiles = ['swoosh.wav', 'splash.wav', 'giggle.wav', 'cheer.wav', 'music.wav'];
+            const names = ['swoosh', 'splash', 'giggle', 'cheer', 'music'];
+            for (let i = 0; i < audioFiles.length; i++) {
+                await loadAudioFile(names[i], `assets/sounds/${audioFiles[i]}`);
+            }
+            
+            this.add.text(this.cameras.main.width/2, this.cameras.main.height/2, 'Loading Game...', { font: '48px Comic Sans MS', fill: '#fff' }).setOrigin(0.5);
+            this.time.delayedCall(800, () => this.scene.start('MainMenu'));
+        }
+    }
+
+    class MainMenu extends Phaser.Scene {
+        constructor() { super('MainMenu'); }
+        create() {
+            dataManager.loadSettings();
+            this.registry.set('musicPlaying', false);
+            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x1a003c).setOrigin(0);
+            
+            // Draw a vibrant background grid pattern
+            const g = this.add.graphics();
+            g.lineStyle(2, 0x4a008c, 0.5);
+            for(let i=0; i<800; i+=40) { g.moveTo(i,0); g.lineTo(i,600); g.moveTo(0,i); g.lineTo(800,i); }
+            g.strokePath();
+
+            // Animated Title
+            const title = this.add.text(this.cameras.main.width/2, 150, 'Water Balloon\nBattle!', { 
+                font: '64px Comic Sans MS', fill: '#00ffff', align: 'center', stroke: '#000088', strokeThickness: 8 
+            }).setOrigin(0.5);
+            this.tweens.add({
+                targets: title, y: 140, angle: 2, duration: 2000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+            });
+            this.tweens.add({
+                targets: title, angle: -2, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+            });
+
+            // Play Button
+            const playBtn = this.add.text(this.cameras.main.width/2, 350, ' PLAY NOW ', { 
+                font: '48px Comic Sans MS', fill: '#fff', backgroundColor: '#ff00aa', padding: {x:20,y:10}, stroke: '#fff', strokeThickness: 4 
+            }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+            
+            playBtn.on('pointerdown', () => { sfx.splash(); this.scene.start('Game'); });
+            playBtn.on('pointerover', () => this.tweens.add({targets: playBtn, scale: 1.1, duration: 100}));
+            playBtn.on('pointerout', () => this.tweens.add({targets: playBtn, scale: 1, duration: 100}));
+
+            // Options Button
+            const optBtn = this.add.text(this.cameras.main.width/2, 430, ' OPTIONS ', { 
+                font: '40px Comic Sans MS', fill: '#fff', backgroundColor: '#0099ff', padding: {x:20,y:10}, stroke: '#fff', strokeThickness: 4 
+            }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+            
+            optBtn.on('pointerdown', () => { sfx.splash(); this.scene.start('Options'); });
+            optBtn.on('pointerover', () => this.tweens.add({targets: optBtn, scale: 1.1, duration: 100}));
+            optBtn.on('pointerout', () => this.tweens.add({targets: optBtn, scale: 1, duration: 100}));
+
+            // High Score
+            this.add.text(this.cameras.main.width-20, 20, `Stars: ✨${dataManager.getStars()}`, { 
+                font: '32px Comic Sans MS', fill: '#FFD700', stroke: '#000', strokeThickness: 4
+            }).setOrigin(1, 0);
+
+            // Start background music
+            if(!this.registry.get('musicPlaying')) {
+                this.registry.set('musicPlaying', true);
+                sfx.playMusic(gameSettings.musicVolume);
+            }
+        }
+    }
+
+    class Options extends Phaser.Scene {
+        constructor() { super('Options'); }
+        create() {
+            this.draggingMusic = false;
+            this.draggingSFX = false;
+            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x1a003c).setOrigin(0);
+            
+            // Title
+            this.add.text(this.cameras.main.width/2, 60, 'OPTIONS', { 
+                font: '56px Comic Sans MS', fill: '#00ffff', stroke: '#000088', strokeThickness: 8 
+            }).setOrigin(0.5);
+
+            let yPos = 150;
+
+            // Music Volume Label
+            this.add.text(100, yPos, 'Music Volume:', { font: '32px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 });
+            
+            // Music Volume Slider
+            const musicSlider = this.add.graphics();
+            const sliderX = 350, sliderY = yPos + 10, sliderWidth = 200, sliderHeight = 20;
+            this.drawSlider(musicSlider, sliderX, sliderY, sliderWidth, sliderHeight, gameSettings.musicVolume);
+            
+            const musicHandle = this.add.circle(sliderX + sliderWidth * gameSettings.musicVolume, sliderY + sliderHeight/2, 12, 0xff0000).setInteractive().setDepth(10);
+            musicHandle.on('pointerdown', () => { this.draggingMusic = true; });
+            
+            this.handleMusicUp = () => { this.draggingMusic = false; };
+            this.handleMusicMove = (p) => {
+                if (this.draggingMusic) {
+                    let newX = Math.max(sliderX, Math.min(sliderX + sliderWidth, p.x));
+                    let newVol = (newX - sliderX) / sliderWidth;
+                    gameSettings.musicVolume = newVol;
+                    musicHandle.x = newX;
+                    musicSlider.clear();
+                    this.drawSlider(musicSlider, sliderX, sliderY, sliderWidth, sliderHeight, newVol);
+                    sfx.setMusicVolume(newVol);
+                }
+            };
+            this.input.on('pointerup', this.handleMusicUp, this);
+            this.input.on('pointermove', this.handleMusicMove, this);
+
+            yPos += 80;
+
+            // SFX Volume Label
+            this.add.text(100, yPos, 'Sound Effects:', { font: '32px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 });
+            
+            // SFX Volume Slider
+            const sfxSlider = this.add.graphics();
+            const sfxHandle = this.add.circle(sliderX + sliderWidth * gameSettings.sfxVolume, sliderY + sliderHeight/2 + 80, 12, 0x00ff00).setInteractive().setDepth(10);
+            sfxHandle.on('pointerdown', () => { this.draggingSFX = true; });
+            
+            this.handleSFXUp = () => { this.draggingSFX = false; };
+            this.handleSFXMove = (p) => {
+                if (this.draggingSFX) {
+                    let newX = Math.max(sliderX, Math.min(sliderX + sliderWidth, p.x));
+                    let newVol = (newX - sliderX) / sliderWidth;
+                    gameSettings.sfxVolume = newVol;
+                    sfxHandle.x = newX;
+                    sfxSlider.clear();
+                    this.drawSlider(sfxSlider, sliderX, sliderY + 80, sliderWidth, sliderHeight, newVol);
+                }
+            };
+            this.input.on('pointerup', this.handleSFXUp, this);
+            this.input.on('pointermove', this.handleSFXMove, this);
+            
+            this.drawSlider(sfxSlider, sliderX, sliderY + 80, sliderWidth, sliderHeight, gameSettings.sfxVolume);
+
+            yPos += 100;
+
+            // Back Button
+            const backBtn = this.add.text(this.cameras.main.width/2, 500, ' BACK ', { 
+                font: '40px Comic Sans MS', fill: '#fff', backgroundColor: '#aa00ff', padding: {x:20,y:10}, stroke: '#fff', strokeThickness: 4 
+            }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+            
+            backBtn.on('pointerdown', () => {
+                dataManager.saveSettings();
+                sfx.splash();
+                this.scene.start('MainMenu');
+            });
+            backBtn.on('pointerover', () => this.tweens.add({targets: backBtn, scale: 1.1, duration: 100}));
+            backBtn.on('pointerout', () => this.tweens.add({targets: backBtn, scale: 1, duration: 100}));
+        }
+
+        drawSlider(graphics, x, y, width, height, value) {
+            graphics.clear();
+            graphics.fillStyle(0x555555);
+            graphics.fillRect(x, y, width, height);
+            graphics.fillStyle(0x00ff00);
+            graphics.fillRect(x, y, width * value, height);
+        }
+
+        shutdown() {
+            this.input.off('pointerup', this.handleMusicUp, this);
+            this.input.off('pointermove', this.handleMusicMove, this);
+            this.input.off('pointerup', this.handleSFXUp, this);
+            this.input.off('pointermove', this.handleSFXMove, this);
+        }
+    }
+
+    class Game extends Phaser.Scene {
+        constructor() { super('Game'); }
+        init() { this.createGraphics(); }
+        
+        // Generates procedural graphics for entities including child-themed sprites
+        createGraphics() {
+            // Player Avatar - Child with happy face
+            let pg = this.make.graphics({x:0,y:0,add:false});
+            pg.fillStyle(0x000000,0.2); pg.fillEllipse(30,58,42,16); // Shadow
+            pg.fillStyle(0xffcc99); pg.fillCircle(30,25,18); // Head
+            pg.fillStyle(0x4488ff); pg.fillRoundedRect(8,40,44,25,8); // Body (shirt)
+            pg.fillStyle(0xffcc99); pg.fillRoundedRect(6,30,9,15); pg.fillRoundedRect(49,30,9,15); // Arms
+            pg.fillStyle(0xffcc99); pg.fillRoundedRect(12,65,8,10); pg.fillRoundedRect(34,65,8,10); // Legs
+            pg.fillStyle(0xffffff); pg.fillCircle(24,22,4); pg.fillCircle(36,22,4); // Eyes
+            pg.fillStyle(0x0066ff); pg.fillCircle(24,22,2); pg.fillCircle(36,22,2); // Pupils
+            pg.fillStyle(0xff6699); pg.fillEllipse(30,28,8,5); // Mouth
+            pg.fillStyle(0xff0000); pg.fillRect(8,38,28,4); // Shirt stripe
+            pg.generateTexture('player', 60, 75);
+
+            // Opponent Avatar - Child with different colors
+            let og = this.make.graphics({x:0,y:0,add:false});
+            og.fillStyle(0x000000,0.2); og.fillEllipse(30,58,42,16); // Shadow
+            og.fillStyle(0xffcc99); og.fillCircle(30,25,18); // Head
+            og.fillStyle(0xff8844); og.fillRoundedRect(8,40,44,25,8); // Body (shirt orange)
+            og.fillStyle(0xffcc99); og.fillRoundedRect(6,30,9,15); og.fillRoundedRect(49,30,9,15); // Arms
+            og.fillStyle(0xffcc99); og.fillRoundedRect(12,65,8,10); og.fillRoundedRect(34,65,8,10); // Legs
+            og.fillStyle(0xffffff); og.fillCircle(24,22,4); og.fillCircle(36,22,4); // Eyes
+            og.fillStyle(0x000000); og.fillCircle(24,22,2); og.fillCircle(36,22,2); // Pupils
+            og.fillStyle(0xff6699); og.fillEllipse(30,28,8,5); // Mouth
+            og.fillStyle(0xffaa44); og.fillRect(12,38,24,4); // Shirt stripe
+            og.generateTexture('opponent', 60, 75);
+
+            // Water Balloon Sprite
+            let bg = this.make.graphics({x:0,y:0,add:false});
+            bg.fillStyle(0x00aaff); bg.fillEllipse(20,25,16,22); // Balloon body
+            bg.fillStyle(0x0088cc); bg.fillTriangle(20,4, 14,10, 26,10); // Balloon knot
+            bg.fillStyle(0xffffff, 0.6); bg.fillEllipse(16,20,6,12); // Reflection/Shine
+            bg.generateTexture('balloon', 40, 50);
+
+            // Splash Particle
+            let sp = this.make.graphics({x:0,y:0,add:false});
+            sp.fillStyle(0x00aaff); sp.fillCircle(8,8,8);
+            sp.generateTexture('splash_part', 16, 16);
+        }
+
+        create() {
+            // Music already playing from MainMenu - no need to restart
+            
+            // Enable multi-touch for joystick + throwing simultaneously
+            this.input.addPointer(2); 
+            this.score = 0;
+            this.isPaused = false;
+            
+            // Render Dynamic Arena Background with hiding places
+            const bgGraphics = this.add.graphics();
+            bgGraphics.fillStyle(0x4ab82c);
+            bgGraphics.fillRect(0,0,this.cameras.main.width, this.cameras.main.height);
+            
+            // Grass details
+            bgGraphics.fillStyle(0x3a981c);
+            for(let i=0; i<80; i++) {
+                bgGraphics.fillEllipse(Phaser.Math.Between(0,800), Phaser.Math.Between(0,600), Phaser.Math.Between(20,60), Phaser.Math.Between(10,30));
+            }
+            
+            // Add hiding places - trees
+            bgGraphics.fillStyle(0x654321);
+            for(let i=0; i<3; i++) {
+                bgGraphics.fillEllipse(150+i*250, 150, 60, 80); // Tree trunks
+            }
+            bgGraphics.fillStyle(0x228800);
+            for(let i=0; i<3; i++) {
+                bgGraphics.fillCircle(150+i*250, 100, 70); // Tree foliage
+            }
+            
+            // Rocks for hiding
+            bgGraphics.fillStyle(0x888888);
+            for(let i=0; i<4; i++) {
+                bgGraphics.fillEllipse(200+i*150, 550, 50, 35);
+            }
+            
+            // Small building/shed
+            bgGraphics.fillStyle(0xaa6644);
+            bgGraphics.fillRect(680, 380, 100, 80);
+            bgGraphics.fillStyle(0xff8844);
+            bgGraphics.fillTriangle(680, 380, 730, 340, 780, 380);
+            bgGraphics.fillStyle(0x5555cc);
+            bgGraphics.fillRect(705, 410, 20, 20);
+            
+            // Central Pool
+            bgGraphics.fillStyle(0x2288dd);
+            bgGraphics.fillEllipse(400, 300, 200, 150);
+            bgGraphics.lineStyle(8, 0xcccccc);
+            bgGraphics.strokeEllipse(400, 300, 200, 150);
+
+            // Instantiate Player
+            this.player = this.physics.add.sprite(400, 500, 'player').setCollideWorldBounds(true).setDepth(10);
+            this.player.body.setSize(40, 40).setOffset(10, 22); // Better physical hitbox
+
+            // Object Pooling for Balloons (must be created BEFORE collision setup)
+            this.balloons = this.physics.add.group({ maxSize: 40 });
+
+            // Instantiate Opponents
+            this.opponents = this.physics.add.group();
+            for(let i=0; i<4; i++) {
+                let op = this.physics.add.sprite(Phaser.Math.Between(100,700), Phaser.Math.Between(100,200), 'opponent').setCollideWorldBounds(true).setBounce(1).setDepth(10);
+                op.body.setSize(40, 40).setOffset(10, 22);
+                op.setData('soaked', false);
+                this.opponents.add(op);
+                this.moveOpponent(op);
+            }
+
+            // Setup Collisions
+            this.physics.add.collider(this.player, this.opponents);
+            this.physics.add.collider(this.opponents, this.opponents);
+            // Overlaps for hits
+            this.physics.add.overlap(this.balloons, this.player, this.hitPlayer, null, this);
+            this.physics.add.overlap(this.balloons, this.opponents, this.hitOpponent, null, this);
+
+            // Keyboard Controls
+            this.cursors = this.input.keyboard.createCursorKeys();
+            this.wasd = this.input.keyboard.addKeys('W,A,S,D');
+
+            // Virtual Joystick for Mobile Control
+            this.joyBase = this.add.circle(120, 480, 80, 0x000000, 0.3).setInteractive().setDepth(100).setScrollFactor(0);
+            this.joyThumb = this.add.circle(120, 480, 40, 0xffffff, 0.7).setDepth(101).setScrollFactor(0);
+            this.joyVector = new Phaser.Math.Vector2(0,0);
+            this.joyPointer = null;
+
+            this.joyBase.on('pointerdown', (p) => { this.joyPointer = p; this.updateJoy(p); });
+            
+            this.handlePointerMove = (p) => { if(this.joyPointer && this.joyPointer.id === p.id) this.updateJoy(p); };
+            this.handlePointerUp = (p) => { 
+                if(this.joyPointer && this.joyPointer.id === p.id) { 
+                    this.joyPointer = null; 
+                    this.joyThumb.setPosition(120,480); 
+                    this.joyVector.reset(); 
+                }
+            };
+            this.handlePointerDown = (p) => {
+                if(this.isPaused) return;
+                if(this.joyPointer && this.joyPointer.id === p.id) return;
+                if(Phaser.Math.Distance.Between(this.joyBase.x, this.joyBase.y, p.x, p.y) < 100) return;
+                this.throwBalloon(this.player, new Phaser.Math.Vector2(p.x, p.y));
+                this.bob(this.player);
+            };
+
+            this.input.on('pointermove', this.handlePointerMove, this);
+            this.input.on('pointerup', this.handlePointerUp, this);
+            this.input.on('pointerdown', this.handlePointerDown, this);
+
+            // Pause button (top right)
+            const pauseBtn = this.add.text(760, 20, '⏸ PAUSE', { 
+                font: '24px Comic Sans MS', fill: '#fff', backgroundColor: '#8800aa', padding: {x:10,y:5}, stroke: '#fff', strokeThickness: 2 
+            }).setOrigin(1, 0).setDepth(100).setInteractive({ useHandCursor: true });
+            
+            pauseBtn.on('pointerdown', () => this.showPauseMenu());
+            pauseBtn.on('pointerover', () => this.tweens.add({targets: pauseBtn, scale: 1.05, duration: 100}));
+            pauseBtn.on('pointerout', () => this.tweens.add({targets: pauseBtn, scale: 1, duration: 100}));
+
+            // HUD Elements
+            this.scoreText = this.add.text(20, 20, 'Soaked: 0', { font: '32px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setDepth(100);
+            this.timeLeft = 60;
+            this.timerText = this.add.text(400, 20, 'Time: 60', { font: '32px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5,0).setDepth(100);
+
+            // Game Timer
+            this.time.addEvent({ delay: 1000, loop: true, callback: () => {
+                if(!this.isPaused) {
+                    this.timeLeft--; 
+                    this.timerText.setText(`Time: ${this.timeLeft}`);
+                    if(this.timeLeft<=0) this.endGame();
+                }
+            }});
+        }
+
+        showPauseMenu() {
+            this.isPaused = true;
+            this.physics.pause();
+            
+            // Semi-transparent overlay
+            let overlay = this.add.rectangle(400,300,800,600,0x000000,0.7).setDepth(2000);
+            
+            // Pause Text
+            this.add.text(400, 150, 'PAUSED', {font:'64px Comic Sans MS', fill:'#fff', stroke:'#000', strokeThickness:8}).setOrigin(0.5).setDepth(2001);
+            
+            // Resume Button
+            let resumeBtn = this.add.text(400, 280, ' RESUME ', {
+                font:'40px Comic Sans MS', fill:'#fff', backgroundColor:'#00aa00', padding: {x:20,y:10}, stroke:'#fff', strokeThickness:4
+            }).setOrigin(0.5).setDepth(2001).setInteractive({useHandCursor:true});
+            
+            resumeBtn.on('pointerdown', () => {
+                overlay.destroy();
+                resumeBtn.destroy();
+                menuBtn.destroy();
+                this.physics.resume();
+                this.isPaused = false;
+            });
+            resumeBtn.on('pointerover', () => this.tweens.add({targets: resumeBtn, scale: 1.1, duration: 100}));
+            resumeBtn.on('pointerout', () => this.tweens.add({targets: resumeBtn, scale: 1, duration: 100}));
+
+            // Menu Button
+            let menuBtn = this.add.text(400, 380, ' MENU ', {
+                font:'40px Comic Sans MS', fill:'#fff', backgroundColor:'#aa00ff', padding: {x:20,y:10}, stroke:'#fff', strokeThickness:4
+            }).setOrigin(0.5).setDepth(2001).setInteractive({useHandCursor:true});
+            
+            menuBtn.on('pointerdown', () => {
+                sfx.stopMusic();
+                this.scene.start('MainMenu');
+            });
+            menuBtn.on('pointerover', () => this.tweens.add({targets: menuBtn, scale: 1.1, duration: 100}));
+            menuBtn.on('pointerout', () => this.tweens.add({targets: menuBtn, scale: 1, duration: 100}));
+        }
+
+        // Calculates joystick vector direction
+        updateJoy(p) {
+            let d = Phaser.Math.Distance.Between(this.joyBase.x, this.joyBase.y, p.x, p.y);
+            let a = Phaser.Math.Angle.Between(this.joyBase.x, this.joyBase.y, p.x, p.y);
+            if(d > 80) d = 80;
+            this.joyThumb.x = this.joyBase.x + Math.cos(a)*d;
+            this.joyThumb.y = this.joyBase.y + Math.sin(a)*d;
+            this.joyVector.set(Math.cos(a)*(d/80), Math.sin(a)*(d/80));
+        }
+
+        update() {
+            if(this.isPaused) return;
+
+            // Process Input (Keyboard + Joystick combination)
+            let iv = new Phaser.Math.Vector2(this.joyVector.x, this.joyVector.y);
+            if(this.cursors.left.isDown || this.wasd.A.isDown) iv.x = -1;
+            if(this.cursors.right.isDown || this.wasd.D.isDown) iv.x = 1;
+            if(this.cursors.up.isDown || this.wasd.W.isDown) iv.y = -1;
+            if(this.cursors.down.isDown || this.wasd.S.isDown) iv.y = 1;
+            
+            if(iv.lengthSq() > 1) iv.normalize();
+            this.player.setVelocity(iv.x * 250, iv.y * 250);
+
+            // Animate Player Wobble
+            if(iv.lengthSq() > 0) {
+                this.player.angle = Math.sin(this.time.now / 100) * 10;
+            } else {
+                this.player.angle = 0;
+            }
+
+            // Pseudo-3D Depth Sorting
+            this.player.setDepth(this.player.y);
+            this.opponents.children.each(o => o.setDepth(o.y));
+        }
+
+        // Visual squash/stretch animation
+        bob(sprite) {
+            this.tweens.add({ targets: sprite, scaleY: 0.8, scaleX: 1.2, duration: 100, yoyo: true });
+        }
+
+        // Recursive Opponent AI
+        moveOpponent(op) {
+            if(!op || op.getData('soaked') || !op.active) return;
+            this.physics.velocityFromRotation(Phaser.Math.FloatBetween(0, Math.PI*2), 120, op.body.velocity);
+            
+            // Random chance to throw a balloon at the player
+            if(Phaser.Math.Between(0,100) < 40) {
+                this.time.delayedCall(Phaser.Math.Between(500, 1500), () => {
+                    if(!op.getData('soaked') && op.active) {
+                        this.throwBalloon(op, new Phaser.Math.Vector2(this.player.x, this.player.y), true);
+                        this.bob(op);
+                    }
+                });
+            }
+
+            this.time.delayedCall(Phaser.Math.Between(1000, 2500), () => this.moveOpponent(op));
+        }
+
+        throwBalloon(thrower, target, isOpponent = false) {
+            sfx.swoosh();
+            
+            // Both player and opponents throw visible balloons
+            let b = this.balloons.get(thrower.x, thrower.y, 'balloon');
+            if(!b) b = this.physics.add.sprite(thrower.x, thrower.y, 'balloon');
+            
+            b.setActive(true).setVisible(true).setDepth(thrower.y+10).setScale(1);
+            b.body.enable = true;
+            
+            // Spin animation
+            if(b.spinTween) b.spinTween.stop();
+            b.spinTween = this.tweens.add({ targets: b, angle: "+=360", duration: 500, repeat: -1 });
+            this.physics.moveTo(b, target.x, target.y, 400);
+            
+            // Store balloon origin for identifying who threw it
+            b.isOpponentBalloon = isOpponent;
+            
+            // Cleanup / Missed Balloon Effect
+            this.time.delayedCall(1500, () => { 
+                if(b.active) { 
+                    this.splash(b.x, b.y); 
+                    if(b.spinTween) b.spinTween.stop();
+                    b.destroy(); 
+                }
+            });
+        }
+
+        splash(x, y) {
+            sfx.splash();
+            let e = this.add.particles(x, y, 'splash_part', {
+                speed: {min:50, max:200}, angle: {min:0, max:360},
+                scale: {start:1, end:0}, lifespan: 400, quantity: 15, gravityY: 300
+            }).setDepth(y+20);
+            this.time.delayedCall(400, () => e.destroy());
+        }
+
+        hitPlayer(player, balloon) {
+            if(!player.invulnerable) {
+                if (balloon && balloon.destroy) balloon.destroy();
+                this.splash(player.x, player.y);
+                player.invulnerable = true;
+                this.cameras.main.shake(200, 0.015);
+                this.tweens.add({ targets: player, alpha: 0.5, yoyo: true, repeat: 5, duration: 100, onComplete: () => player.invulnerable=false });
+            }
+        }
+
+        hitOpponent(balloon, op) {
+            // Only player balloons can hit opponents (skip opponent balloons)
+            if(!op || balloon.isOpponentBalloon || op.getData('soaked')) {
+                return;
+            }
+            
+            if (balloon && balloon.destroy) balloon.destroy(); 
+            this.splash(op.x, op.y);
+            sfx.giggle();
+            this.score++; 
+            this.scoreText.setText(`Soaked: ${this.score}`);
+            op.setData('soaked', true);
+            op.setVelocity(0,0);
+            op.setTint(0x00aaff); // Soaked visual indicator
+            
+            // Floating "+1" text
+            let pt = this.add.text(op.x, op.y-30, '+1', {font:'24px Arial', fill:'#ff0', stroke:'#000', strokeThickness:3}).setOrigin(0.5).setDepth(1000);
+            this.tweens.add({targets:pt, y:op.y-70, alpha:0, duration:1000, ease:'Power2', onComplete:()=>pt.destroy()});
+
+            // Shrink and squish animation
+            this.tweens.add({ targets: op, scaleY: 0.5, scaleX: 1.5, yoyo: true, duration: 150, repeat: 3, onComplete: () => {
+                this.time.delayedCall(2000, () => {
+                    if(op.active) { op.clearTint(); op.setData('soaked', false); this.moveOpponent(op); }
+                });
+            }});
+        }
+        }
+
+        // Cleanup handlers when scene shuts down
+        shutdown() {
+            if (this.handlePointerMove) this.input.off('pointermove', this.handlePointerMove, this);
+            if (this.handlePointerUp) this.input.off('pointerup', this.handlePointerUp, this);
+            if (this.handlePointerDown) this.input.off('pointerdown', this.handlePointerDown, this);
+        }
+
+        endGame() {
+            this.scene.pause();
+            sfx.cheer();
+            dataManager.addStars(this.score);
+            
+            // Semi-transparent overlay
+            let overlay = this.add.rectangle(400,300,800,600,0x000000,0.8).setDepth(2000);
+            
+            // Victory Texts
+            this.add.text(400, 200, "TIME'S UP!", {font:'64px Comic Sans MS', fill:'#fff', stroke:'#000', strokeThickness:8}).setOrigin(0.5).setDepth(2001);
+            this.add.text(400, 300, `You soaked ${this.score} opponents!`, {font:'40px Comic Sans MS', fill:'#0f0', stroke:'#000', strokeThickness:4}).setOrigin(0.5).setDepth(2001);
+            this.add.text(400, 380, `Earned: ✨${this.score}`, {font:'32px Comic Sans MS', fill:'#FFD700', stroke:'#000', strokeThickness:4}).setOrigin(0.5).setDepth(2001);
+            
+            // Return to Menu Button
+            let btn = this.add.text(400, 500, ' MENU ', {
+                font:'40px Comic Sans MS', fill:'#fff', backgroundColor:'#aa00ff', padding: {x:20,y:10}, stroke:'#fff', strokeThickness:4
+            }).setOrigin(0.5).setDepth(2001).setInteractive({useHandCursor:true});
+            
+            btn.on('pointerdown', () => {
+                sfx.stopMusic();
+                this.scene.start('MainMenu');
+            });
+            btn.on('pointerover', () => this.tweens.add({targets: btn, scale: 1.1, duration: 100}));
+            btn.on('pointerout', () => this.tweens.add({targets: btn, scale: 1, duration: 100}));
+        }
+    }
+
+    const config = {
+        type: Phaser.AUTO, 
+        width: 800, 
+        height: 600,
+        scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+        physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
+        scene: [Preloader, MainMenu, Options, Game]
+    };
+    
+    // Boot the game
+    const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
