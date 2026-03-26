@@ -290,6 +290,11 @@
             this.input.off('pointerup', this.handleSFXUp, this);
             this.input.off('pointermove', this.handleSFXMove, this);
         }
+
+        endGame() {
+            this.scene.pause();
+            this.scene.launch('GameOver');
+        }
     }
 
     class Game extends Phaser.Scene {
@@ -347,15 +352,42 @@
             
             // Render Dynamic Arena Background with hiding places
             const bgGraphics = this.add.graphics();
-            bgGraphics.fillStyle(0x4ab82c);
-            bgGraphics.fillRect(0,0,this.cameras.main.width, this.cameras.main.height);
-            
-            // Grass details
-            bgGraphics.fillStyle(0x3a981c);
-            for(let i=0; i<80; i++) {
-                bgGraphics.fillEllipse(Phaser.Math.Between(0,800), Phaser.Math.Between(0,600), Phaser.Math.Between(20,60), Phaser.Math.Between(10,30));
+            bgGraphics.fillStyle(0x87ceeb); // Sky blue
+            bgGraphics.fillRect(0, 0, this.cameras.main.width, this.cameras.main.height);
+
+            // Add clouds
+            for (let i = 0; i < 5; i++) {
+                bgGraphics.fillStyle(0xffffff, 0.8);
+                bgGraphics.fillEllipse(
+                    Phaser.Math.Between(50, 750),
+                    Phaser.Math.Between(50, 200),
+                    Phaser.Math.Between(80, 120),
+                    Phaser.Math.Between(40, 60)
+                );
             }
-            
+
+            // Add grass
+            bgGraphics.fillStyle(0x228b22); // Forest green
+            bgGraphics.fillRect(0, this.cameras.main.height - 100, this.cameras.main.width, 100);
+
+            // Add flowers
+            for (let i = 0; i < 20; i++) {
+                bgGraphics.fillStyle(Phaser.Display.Color.RandomRGB().color);
+                bgGraphics.fillCircle(
+                    Phaser.Math.Between(0, this.cameras.main.width),
+                    Phaser.Math.Between(this.cameras.main.height - 100, this.cameras.main.height - 20),
+                    Phaser.Math.Between(3, 6)
+                );
+            }
+
+            // Add trees
+            for (let i = 0; i < 3; i++) {
+                bgGraphics.fillStyle(0x8b4513); // Brown trunk
+                bgGraphics.fillRect(100 + i * 200, this.cameras.main.height - 150, 20, 50);
+                bgGraphics.fillStyle(0x006400); // Dark green foliage
+                bgGraphics.fillCircle(110 + i * 200, this.cameras.main.height - 150, 40);
+            }
+
             // Add hiding places - trees
             bgGraphics.fillStyle(0x654321);
             for(let i=0; i<3; i++) {
@@ -546,13 +578,14 @@
 
         // Recursive Opponent AI
         moveOpponent(op) {
-            if(!op || op.getData('soaked') || !op.active) return;
-            this.physics.velocityFromRotation(Phaser.Math.FloatBetween(0, Math.PI*2), 120, op.body.velocity);
-            
+            if (!op || op.getData('soaked') || !op.active) return;
+            const speed = op.getData('speed') || 120;
+            this.physics.velocityFromRotation(Phaser.Math.FloatBetween(0, Math.PI * 2), speed, op.body.velocity);
+
             // Random chance to throw a balloon at the player
-            if(Phaser.Math.Between(0,100) < 40) {
+            if (Phaser.Math.Between(0, 100) < 40) {
                 this.time.delayedCall(Phaser.Math.Between(500, 1500), () => {
-                    if(!op.getData('soaked') && op.active) {
+                    if (!op.getData('soaked') && op.active) {
                         this.throwBalloon(op, new Phaser.Math.Vector2(this.player.x, this.player.y), true);
                         this.bob(op);
                     }
@@ -562,32 +595,20 @@
             this.time.delayedCall(Phaser.Math.Between(1000, 2500), () => this.moveOpponent(op));
         }
 
-        throwBalloon(thrower, target, isOpponent = false) {
-            sfx.swoosh();
-            
-            // Both player and opponents throw visible balloons
-            let b = this.balloons.get(thrower.x, thrower.y, 'balloon');
-            if(!b) b = this.physics.add.sprite(thrower.x, thrower.y, 'balloon');
-            
-            b.setActive(true).setVisible(true).setDepth(thrower.y+10).setScale(1);
-            b.body.enable = true;
-            
-            // Spin animation
-            if(b.spinTween) b.spinTween.stop();
-            b.spinTween = this.tweens.add({ targets: b, angle: "+=360", duration: 500, repeat: -1 });
-            this.physics.moveTo(b, target.x, target.y, 400);
-            
-            // Store balloon origin for identifying who threw it
-            b.isOpponentBalloon = isOpponent;
-            
-            // Cleanup / Missed Balloon Effect
-            this.time.delayedCall(1500, () => { 
-                if(b.active) { 
-                    this.splash(b.x, b.y); 
-                    if(b.spinTween) b.spinTween.stop();
-                    b.destroy(); 
-                }
-            });
+        throwBalloon(thrower, target) {
+            if (thrower.getData('soaked')) return; // Prevent soaked entities from throwing
+
+            // Ensure entity is within bounds before throwing
+            if (thrower.x < 0 || thrower.x > this.cameras.main.width || thrower.y < 0 || thrower.y > this.cameras.main.height) {
+                return;
+            }
+
+            const balloon = this.balloons.get(thrower.x, thrower.y, 'balloon');
+            if (balloon) {
+                balloon.setActive(true).setVisible(true);
+                this.physics.moveTo(balloon, target.x, target.y, 300);
+                balloon.setData('owner', thrower);
+            }
         }
 
         splash(x, y) {
@@ -600,41 +621,78 @@
         }
 
         hitPlayer(player, balloon) {
-            if(!player.invulnerable) {
+            if (!player.invulnerable) {
                 if (balloon && balloon.destroy) balloon.destroy();
                 this.splash(player.x, player.y);
                 player.invulnerable = true;
                 this.cameras.main.shake(200, 0.015);
-                this.tweens.add({ targets: player, alpha: 0.5, yoyo: true, repeat: 5, duration: 100, onComplete: () => player.invulnerable=false });
+                this.tweens.add({
+                    targets: player,
+                    alpha: 0.5,
+                    yoyo: true,
+                    repeat: 5,
+                    duration: 100,
+                    onComplete: () => (player.invulnerable = false),
+                });
+
+                this.playerSoakedCount++;
+                this.timerText.setText(`Player Soaked: ${this.playerSoakedCount}`);
+
+                if (this.playerSoakedCount >= 10) {
+                    this.endGame(false); // Player loses
+                }
             }
         }
 
         hitOpponent(balloon, op) {
-            // Only player balloons can hit opponents (skip opponent balloons)
-            if(!op || balloon.isOpponentBalloon || op.getData('soaked')) {
+            if (!op || balloon.isOpponentBalloon || op.getData('soaked')) {
                 return;
             }
-            
-            if (balloon && balloon.destroy) balloon.destroy(); 
+
+            if (balloon && balloon.destroy) balloon.destroy();
             this.splash(op.x, op.y);
             sfx.giggle();
-            this.score++; 
-            this.scoreText.setText(`Soaked: ${this.score}`);
-            op.setData('soaked', true);
-            op.setVelocity(0,0);
-            op.setTint(0x00aaff); // Soaked visual indicator
-            
-            // Floating "+1" text
-            let pt = this.add.text(op.x, op.y-30, '+1', {font:'24px Arial', fill:'#ff0', stroke:'#000', strokeThickness:3}).setOrigin(0.5).setDepth(1000);
-            this.tweens.add({targets:pt, y:op.y-70, alpha:0, duration:1000, ease:'Power2', onComplete:()=>pt.destroy()});
 
-            // Shrink and squish animation
-            this.tweens.add({ targets: op, scaleY: 0.5, scaleX: 1.5, yoyo: true, duration: 150, repeat: 3, onComplete: () => {
-                this.time.delayedCall(2000, () => {
-                    if(op.active) { op.clearTint(); op.setData('soaked', false); this.moveOpponent(op); }
-                });
-            }});
+            if (op.getData('hits') !== undefined) {
+                const hits = op.getData('hits') + 1;
+                op.setData('hits', hits);
+                if (hits >= 5) {
+                    this.scene.pause();
+                    this.scene.launch('WinScreen');
+                }
+                return;
+            }
+
+            this.npcSoakedCount++;
+            this.scoreText.setText(`NPCs Soaked: ${this.npcSoakedCount}`);
+
+            op.setData('soaked', true);
+            op.setVelocity(0, 0);
+            op.setTint(0x00aaff);
+
+            this.time.delayedCall(2000, () => {
+                if (op.active) {
+                    op.clearTint();
+                    op.setData('soaked', false);
+                    this.moveOpponent(op);
+                }
+            });
         }
+
+        endGame(playerWon) {
+            this.scene.pause();
+            if (playerWon) {
+                if (this.level < 5) {
+                    this.level++;
+                    this.startLevel(this.level);
+                } else {
+                    this.scene.pause();
+                    this.scene.launch('WinScreen');
+                }
+            } else {
+                this.scene.pause();
+                this.scene.launch('LoseScreen');
+            }
         }
 
         // Cleanup handlers when scene shuts down
@@ -646,28 +704,55 @@
 
         endGame() {
             this.scene.pause();
-            sfx.cheer();
-            dataManager.addStars(this.score);
-            
-            // Semi-transparent overlay
-            let overlay = this.add.rectangle(400,300,800,600,0x000000,0.8).setDepth(2000);
-            
-            // Victory Texts
-            this.add.text(400, 200, "TIME'S UP!", {font:'64px Comic Sans MS', fill:'#fff', stroke:'#000', strokeThickness:8}).setOrigin(0.5).setDepth(2001);
-            this.add.text(400, 300, `You soaked ${this.score} opponents!`, {font:'40px Comic Sans MS', fill:'#0f0', stroke:'#000', strokeThickness:4}).setOrigin(0.5).setDepth(2001);
-            this.add.text(400, 380, `Earned: ✨${this.score}`, {font:'32px Comic Sans MS', fill:'#FFD700', stroke:'#000', strokeThickness:4}).setOrigin(0.5).setDepth(2001);
-            
-            // Return to Menu Button
-            let btn = this.add.text(400, 500, ' MENU ', {
-                font:'40px Comic Sans MS', fill:'#fff', backgroundColor:'#aa00ff', padding: {x:20,y:10}, stroke:'#fff', strokeThickness:4
-            }).setOrigin(0.5).setDepth(2001).setInteractive({useHandCursor:true});
-            
-            btn.on('pointerdown', () => {
-                sfx.stopMusic();
-                this.scene.start('MainMenu');
+            this.scene.launch('GameOver');
+        }
+    }
+
+    class LoseScreen extends Phaser.Scene {
+        constructor() {
+            super('LoseScreen');
+        }
+
+        create() {
+            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x000000).setOrigin(0).setAlpha(0.7);
+            this.add.text(this.cameras.main.width / 2, this.cameras.main.height / 2 - 50, 'You Lost!', {
+                font: '64px Comic Sans MS',
+                fill: '#ff0000',
+                stroke: '#000',
+                strokeThickness: 8,
+            }).setOrigin(0.5);
+
+            sfx.cheer(); // Play losing sound effect
+
+            this.time.delayedCall(5000, () => {
+                this.cameras.main.fadeOut(1000, 0, 0, 0, () => {
+                    this.scene.start('MainMenu');
+                });
             });
-            btn.on('pointerover', () => this.tweens.add({targets: btn, scale: 1.1, duration: 100}));
-            btn.on('pointerout', () => this.tweens.add({targets: btn, scale: 1, duration: 100}));
+        }
+    }
+
+    class WinScreen extends Phaser.Scene {
+        constructor() {
+            super('WinScreen');
+        }
+
+        create() {
+            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x000000).setOrigin(0).setAlpha(0.7);
+            this.add.text(this.cameras.main.width / 2, this.cameras.main.height / 2 - 50, 'You Won!', {
+                font: '64px Comic Sans MS',
+                fill: '#00ff00',
+                stroke: '#000',
+                strokeThickness: 8,
+            }).setOrigin(0.5);
+
+            sfx.cheer(); // Play winning sound effect
+
+            this.time.delayedCall(5000, () => {
+                this.cameras.main.fadeOut(1000, 0, 0, 0, () => {
+                    this.scene.start('MainMenu');
+                });
+            });
         }
     }
 
@@ -677,7 +762,7 @@
         height: 600,
         scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
         physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
-        scene: [Preloader, MainMenu, Options, Game]
+        scene: [Preloader, MainMenu, Options, Game, LoseScreen, WinScreen],
     };
     
     // Boot the game
