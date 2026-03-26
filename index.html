@@ -143,7 +143,6 @@
         constructor() { super('MainMenu'); }
         create() {
             dataManager.loadSettings();
-            this.registry.set('musicPlaying', false);
             this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x1a003c).setOrigin(0);
             
             // Draw a vibrant background grid pattern
@@ -186,11 +185,9 @@
                 font: '32px Comic Sans MS', fill: '#FFD700', stroke: '#000', strokeThickness: 4
             }).setOrigin(1, 0);
 
-            // Start background music
-            if(!this.registry.get('musicPlaying')) {
-                this.registry.set('musicPlaying', true);
-                sfx.playMusic(gameSettings.musicVolume);
-            }
+            // Start background music fresh on every menu visit
+            sfx.stopMusic();
+            sfx.playMusic(gameSettings.musicVolume);
         }
     }
 
@@ -290,16 +287,14 @@
             this.input.off('pointerup', this.handleSFXUp, this);
             this.input.off('pointermove', this.handleSFXMove, this);
         }
-
-        endGame() {
-            this.scene.pause();
-            this.scene.launch('GameOver');
-        }
     }
 
     class Game extends Phaser.Scene {
         constructor() { super('Game'); }
-        init() { this.createGraphics(); }
+        init(data) {
+            this.currentLevel = (data && data.level) ? data.level : 1;
+            this.createGraphics();
+        }
         
         // Generates procedural graphics for entities including child-themed sprites
         createGraphics() {
@@ -340,6 +335,26 @@
             let sp = this.make.graphics({x:0,y:0,add:false});
             sp.fillStyle(0x00aaff); sp.fillCircle(8,8,8);
             sp.generateTexture('splash_part', 16, 16);
+
+            // Final Boss Sprite - bigger, dark purple, crowned
+            let boss = this.make.graphics({x:0,y:0,add:false});
+            boss.fillStyle(0x000000,0.25); boss.fillEllipse(50,102,72,20); // Shadow
+            boss.fillStyle(0xdd99ff); boss.fillCircle(50,40,30); // Head
+            boss.fillStyle(0x550088); boss.fillRoundedRect(14,68,72,40,10); // Body
+            boss.fillStyle(0xdd99ff); boss.fillRoundedRect(4,54,16,26); boss.fillRoundedRect(80,54,16,26); // Arms
+            boss.fillStyle(0xdd99ff); boss.fillRoundedRect(20,108,15,18); boss.fillRoundedRect(65,108,15,18); // Legs
+            boss.fillStyle(0xff2222); boss.fillCircle(40,36,8); boss.fillCircle(60,36,8); // Eyes (red!)
+            boss.fillStyle(0xffffff); boss.fillCircle(43,36,3); boss.fillCircle(63,36,3); // Eye glint
+            boss.fillStyle(0x330022); boss.fillEllipse(50,52,16,8); // Mean mouth
+            boss.fillStyle(0xff00ff); boss.fillRect(14,68,44,6); // Shirt stripe
+            // Gold crown
+            boss.fillStyle(0xffdd00);
+            boss.fillRect(28,12,44,12);
+            boss.fillTriangle(28,12,33,0,38,12);
+            boss.fillTriangle(47,12,50,2,53,12);
+            boss.fillTriangle(62,12,67,0,72,12);
+            boss.fillStyle(0xff0000); boss.fillCircle(50,12,4); // Crown gem
+            boss.generateTexture('boss', 100, 128);
         }
 
         create() {
@@ -349,6 +364,10 @@
             this.input.addPointer(2); 
             this.score = 0;
             this.isPaused = false;
+            this.playerSoakedCount = 0;
+            this.npcSoakedCount = 0;
+            this.gameEnded = false;
+            this.levelConfig = this.getLevelConfig(this.currentLevel);
             
             // Render Dynamic Arena Background with hiding places
             const bgGraphics = this.add.graphics();
@@ -425,15 +444,11 @@
             // Object Pooling for Balloons (must be created BEFORE collision setup)
             this.balloons = this.physics.add.group({ maxSize: 40 });
 
-            // Instantiate Opponents
+            // Object groups
             this.opponents = this.physics.add.group();
-            for(let i=0; i<4; i++) {
-                let op = this.physics.add.sprite(Phaser.Math.Between(100,700), Phaser.Math.Between(100,200), 'opponent').setCollideWorldBounds(true).setBounce(1).setDepth(10);
-                op.body.setSize(40, 40).setOffset(10, 22);
-                op.setData('soaked', false);
-                this.opponents.add(op);
-                this.moveOpponent(op);
-            }
+
+            // Spawn entities for this level
+            this.spawnLevel();
 
             // Setup Collisions
             this.physics.add.collider(this.player, this.opponents);
@@ -484,16 +499,24 @@
             pauseBtn.on('pointerout', () => this.tweens.add({targets: pauseBtn, scale: 1, duration: 100}));
 
             // HUD Elements
-            this.scoreText = this.add.text(20, 20, 'Soaked: 0', { font: '32px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setDepth(100);
-            this.timeLeft = 60;
-            this.timerText = this.add.text(400, 20, 'Time: 60', { font: '32px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5,0).setDepth(100);
+            const isBossLevel = this.levelConfig.isBoss;
+            const levelLabel = isBossLevel ? '\ud83d\udc51 BOSS!' : `Level ${this.currentLevel}/5`;
+            this.levelText = this.add.text(400, 20, levelLabel, {
+                font: '28px Comic Sans MS', fill: isBossLevel ? '#ff88ff' : '#FFD700',
+                stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5, 0).setDepth(100);
+            const soakTarget = isBossLevel ? '' : `0/${this.levelConfig.opponents}`;
+            this.scoreText = this.add.text(20, 20, `Soaked: ${soakTarget}`, { font: '24px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setDepth(100);
+            this.livesText = this.add.text(20, 50, '\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f', { font: '20px Comic Sans MS' }).setDepth(100);
+            this.timeLeft = this.levelConfig.time;
+            this.timerText = this.add.text(760, 20, `Time: ${this.timeLeft}`, { font: '24px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(1, 0).setDepth(100);
 
             // Game Timer
             this.time.addEvent({ delay: 1000, loop: true, callback: () => {
-                if(!this.isPaused) {
-                    this.timeLeft--; 
+                if(!this.isPaused && !this.gameEnded) {
+                    this.timeLeft--;
                     this.timerText.setText(`Time: ${this.timeLeft}`);
-                    if(this.timeLeft<=0) this.endGame();
+                    if(this.timeLeft <= 0) this.endGame(false);
                 }
             }});
         }
@@ -576,38 +599,136 @@
             this.tweens.add({ targets: sprite, scaleY: 0.8, scaleX: 1.2, duration: 100, yoyo: true });
         }
 
-        // Recursive Opponent AI
-        moveOpponent(op) {
-            if (!op || op.getData('soaked') || !op.active) return;
-            const speed = op.getData('speed') || 120;
-            this.physics.velocityFromRotation(Phaser.Math.FloatBetween(0, Math.PI * 2), speed, op.body.velocity);
+        // Level configs: opponents, speed, throwChance (0-100), time (seconds)
+        getLevelConfig(level) {
+            const configs = [
+                null,
+                { opponents: 2, speed: 85,  throwChance: 18, time: 60, isBoss: false }, // Level 1
+                { opponents: 3, speed: 105, throwChance: 28, time: 65, isBoss: false }, // Level 2
+                { opponents: 4, speed: 130, throwChance: 38, time: 70, isBoss: false }, // Level 3
+                { opponents: 5, speed: 155, throwChance: 50, time: 75, isBoss: false }, // Level 4
+                { opponents: 6, speed: 175, throwChance: 62, time: 80, isBoss: false }, // Level 5
+                { opponents: 0, speed: 0,   throwChance: 0,  time: 90, isBoss: true  }, // Level 6 - Boss
+            ];
+            return configs[Math.min(level, 6)] || configs[1];
+        }
 
-            // Random chance to throw a balloon at the player
-            if (Phaser.Math.Between(0, 100) < 40) {
-                this.time.delayedCall(Phaser.Math.Between(500, 1500), () => {
-                    if (!op.getData('soaked') && op.active) {
+        spawnLevel() {
+            const cfg = this.levelConfig;
+            if (cfg.isBoss) {
+                this.boss = this.physics.add.sprite(400, 130, 'boss').setCollideWorldBounds(true).setBounce(0.5).setDepth(12);
+                this.boss.setScale(1.3);
+                this.boss.body.setSize(60, 75).setOffset(20, 35);
+                this.boss.setData('soaked', false);
+                this.boss.setData('isBoss', true);
+                this.boss.setData('hp', 10);
+                this.opponents.add(this.boss);
+                this.moveBoss(this.boss);
+                // Boss HP bar
+                this.bossHpBg  = this.add.rectangle(400, 578, 304, 22, 0x330033).setDepth(100).setOrigin(0.5);
+                this.bossHpBar = this.add.rectangle(250, 578, 300, 18, 0xff00ff).setDepth(101).setOrigin(0, 0.5);
+                this.bossLabel = this.add.text(400, 556, '\ud83d\udc51 FINAL BOSS', { font: '16px Comic Sans MS', fill: '#ff88ff', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5).setDepth(101);
+            } else {
+                for (let i = 0; i < cfg.opponents; i++) {
+                    let op = this.physics.add.sprite(
+                        Phaser.Math.Between(80, 720),
+                        Phaser.Math.Between(80, 220),
+                        'opponent'
+                    ).setCollideWorldBounds(true).setBounce(1).setDepth(10);
+                    op.body.setSize(40, 40).setOffset(10, 22);
+                    op.setData('soaked', false);
+                    op.setData('isBoss', false);
+                    op.setData('speed', cfg.speed);
+                    op.setData('throwChance', cfg.throwChance);
+                    this.opponents.add(op);
+                    this.moveOpponent(op);
+                }
+            }
+        }
+
+        showLevelComplete() {
+            const W = this.cameras.main.width;
+            const H = this.cameras.main.height;
+            sfx.cheer();
+
+            this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.65).setDepth(3000);
+
+            const banner = this.add.text(W/2, H/2 - 60, `LEVEL ${this.currentLevel}\nCOMPLETE!`, {
+                fontFamily: 'Comic Sans MS', fontSize: '64px',
+                color: '#FFD700', stroke: '#000', strokeThickness: 8, align: 'center'
+            }).setOrigin(0.5).setDepth(3001).setAlpha(0).setScale(0.4);
+            this.tweens.add({ targets: banner, alpha: 1, scaleX: 1, scaleY: 1, duration: 500, ease: 'Back.easeOut' });
+
+            const nextLevel = this.currentLevel + 1;
+            const nextMsg = nextLevel === 6 ? '\ud83d\udc51  Next: FINAL BOSS!' : `Next: Level ${nextLevel}/5`;
+            const sub = this.add.text(W/2, H/2 + 55, nextMsg, {
+                fontFamily: 'Comic Sans MS', fontSize: '30px',
+                color: nextLevel === 6 ? '#ff88ff' : '#ffffff',
+                stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5).setAlpha(0).setDepth(3001);
+            this.tweens.add({ targets: sub, alpha: 1, duration: 400, delay: 600 });
+
+            this.time.delayedCall(3200, () => {
+                this.cameras.main.fadeOut(600, 0, 0, 0);
+                this.cameras.main.once('camerafadeoutcomplete', () => {
+                    this.scene.restart({ level: nextLevel });
+                });
+            });
+        }
+
+        // Regular Opponent AI
+        moveOpponent(op) {
+            if (!op || op.getData('soaked') || !op.active || op.getData('isBoss')) return;
+            const speed = op.getData('speed') || 100;
+            const throwChance = op.getData('throwChance') || 30;
+            this.physics.velocityFromRotation(Phaser.Math.FloatBetween(0, Math.PI * 2), speed, op.body.velocity);
+            if (Phaser.Math.Between(0, 100) < throwChance) {
+                this.time.delayedCall(Phaser.Math.Between(400, 1400), () => {
+                    if (!op.getData('soaked') && op.active && !this.gameEnded) {
                         this.throwBalloon(op, new Phaser.Math.Vector2(this.player.x, this.player.y), true);
                         this.bob(op);
                     }
                 });
             }
-
-            this.time.delayedCall(Phaser.Math.Between(1000, 2500), () => this.moveOpponent(op));
+            this.time.delayedCall(Phaser.Math.Between(900, 2200), () => this.moveOpponent(op));
         }
 
-        throwBalloon(thrower, target) {
-            if (thrower.getData('soaked')) return; // Prevent soaked entities from throwing
+        // Final Boss AI - faster, throws TWO balloons per attack with spread
+        moveBoss(op) {
+            if (!op || !op.active || this.gameEnded) return;
+            this.physics.velocityFromRotation(Phaser.Math.FloatBetween(0, Math.PI * 2), 190, op.body.velocity);
+            this.time.delayedCall(Phaser.Math.Between(300, 800), () => {
+                if (!op.active || this.gameEnded) return;
+                const angle = Phaser.Math.Angle.Between(op.x, op.y, this.player.x, this.player.y);
+                const spread = 0.2;
+                this.throwBalloonAtAngle(op, angle - spread);
+                this.time.delayedCall(130, () => {
+                    if (op.active && !this.gameEnded) this.throwBalloonAtAngle(op, angle + spread);
+                });
+                this.bob(op);
+            });
+            this.time.delayedCall(Phaser.Math.Between(900, 1800), () => this.moveBoss(op));
+        }
 
-            // Ensure entity is within bounds before throwing
-            if (thrower.x < 0 || thrower.x > this.cameras.main.width || thrower.y < 0 || thrower.y > this.cameras.main.height) {
-                return;
+        throwBalloonAtAngle(thrower, angle) {
+            const balloon = this.balloons.get(thrower.x, thrower.y, 'balloon');
+            if (balloon) {
+                balloon.setActive(true).setVisible(true);
+                balloon.setVelocity(Math.cos(angle) * 320, Math.sin(angle) * 320);
+                balloon.setData('owner', thrower);
+                balloon.setData('isOpponentBalloon', true);
             }
+        }
 
+        throwBalloon(thrower, target, isOpponent) {
+            if (!thrower || thrower.getData('soaked')) return;
+            if (thrower.x < 0 || thrower.x > this.cameras.main.width || thrower.y < 0 || thrower.y > this.cameras.main.height) return;
             const balloon = this.balloons.get(thrower.x, thrower.y, 'balloon');
             if (balloon) {
                 balloon.setActive(true).setVisible(true);
                 this.physics.moveTo(balloon, target.x, target.y, 300);
                 balloon.setData('owner', thrower);
+                balloon.setData('isOpponentBalloon', isOpponent || false);
             }
         }
 
@@ -621,77 +742,93 @@
         }
 
         hitPlayer(player, balloon) {
+            if (this.gameEnded) return;
+            if (!balloon.getData('isOpponentBalloon')) return; // Only opponent balloons hurt player
             if (!player.invulnerable) {
-                if (balloon && balloon.destroy) balloon.destroy();
+                balloon.setActive(false).setVisible(false);
                 this.splash(player.x, player.y);
                 player.invulnerable = true;
                 this.cameras.main.shake(200, 0.015);
                 this.tweens.add({
-                    targets: player,
-                    alpha: 0.5,
-                    yoyo: true,
-                    repeat: 5,
-                    duration: 100,
-                    onComplete: () => (player.invulnerable = false),
+                    targets: player, alpha: 0.5, yoyo: true, repeat: 5, duration: 100,
+                    onComplete: () => { player.invulnerable = false; }
                 });
-
                 this.playerSoakedCount++;
-                this.timerText.setText(`Player Soaked: ${this.playerSoakedCount}`);
-
-                if (this.playerSoakedCount >= 10) {
-                    this.endGame(false); // Player loses
-                }
+                const livesLeft = Math.max(0, 5 - this.playerSoakedCount);
+                this.livesText.setText(livesLeft > 0 ? '\u2764\ufe0f'.repeat(livesLeft) : '\ud83d\udc80');
+                if (this.playerSoakedCount >= 5) this.endGame(false);
             }
         }
 
         hitOpponent(balloon, op) {
-            if (!op || balloon.isOpponentBalloon || op.getData('soaked')) {
-                return;
-            }
+            if (this.gameEnded) return;
+            if (!op || !op.active) return;
+            if (balloon.getData('isOpponentBalloon')) return; // Opponent balloons don't hurt opponents
+            if (op.getData('soaked')) return;
 
-            if (balloon && balloon.destroy) balloon.destroy();
+            balloon.setActive(false).setVisible(false);
             this.splash(op.x, op.y);
             sfx.giggle();
 
-            if (op.getData('hits') !== undefined) {
-                const hits = op.getData('hits') + 1;
-                op.setData('hits', hits);
-                if (hits >= 5) {
-                    this.scene.pause();
-                    this.scene.launch('WinScreen');
+            if (op.getData('isBoss')) {
+                const hp = op.getData('hp') - 1;
+                op.setData('hp', hp);
+                // Flash boss on hit
+                this.tweens.add({ targets: op, alpha: 0.2, duration: 70, yoyo: true, repeat: 2,
+                    onComplete: () => op.setAlpha(1) });
+                // Update HP bar width and color
+                const pct = Math.max(0, hp / 10);
+                this.tweens.add({ targets: this.bossHpBar, displayWidth: Math.ceil(300 * pct), duration: 200 });
+                if (pct <= 0.3) this.bossHpBar.setFillStyle(0xff3300);
+                else if (pct <= 0.6) this.bossHpBar.setFillStyle(0xffaa00);
+                if (hp <= 0) {
+                    op.setActive(false).setVisible(false);
+                    op.body.stop();
+                    this.bossHpBar.destroy();
+                    this.bossHpBg.destroy();
+                    this.bossLabel.destroy();
+                    this.endGame(true);
                 }
                 return;
             }
 
+            // Regular opponent - permanently soaked
             this.npcSoakedCount++;
-            this.scoreText.setText(`NPCs Soaked: ${this.npcSoakedCount}`);
-
+            this.scoreText.setText(`Soaked: ${this.npcSoakedCount}/${this.levelConfig.opponents}`);
             op.setData('soaked', true);
             op.setVelocity(0, 0);
+            op.body.stop();
             op.setTint(0x00aaff);
-
-            this.time.delayedCall(2000, () => {
-                if (op.active) {
-                    op.clearTint();
-                    op.setData('soaked', false);
-                    this.moveOpponent(op);
-                }
-            });
+            op.setAlpha(0.5);
+            // Check if all opponents soaked = level clear
+            if (this.npcSoakedCount >= this.levelConfig.opponents) {
+                this.endGame(true);
+            }
         }
 
         endGame(playerWon) {
-            this.scene.pause();
+            if (this.gameEnded) return;
+            this.gameEnded = true;
+            this.isPaused = true;
+            this.physics.pause();
             if (playerWon) {
-                if (this.level < 5) {
-                    this.level++;
-                    this.startLevel(this.level);
+                if (this.levelConfig.isBoss) {
+                    // Defeated the final boss — true victory!
+                    dataManager.addStars(10);
+                    this.time.delayedCall(400, () => {
+                        this.scene.pause();
+                        this.scene.launch('WinScreen');
+                    });
                 } else {
-                    this.scene.pause();
-                    this.scene.launch('WinScreen');
+                    // Level 1-5 cleared — advance
+                    dataManager.addStars(this.currentLevel);
+                    this.showLevelComplete();
                 }
             } else {
-                this.scene.pause();
-                this.scene.launch('LoseScreen');
+                this.time.delayedCall(400, () => {
+                    this.scene.pause();
+                    this.scene.launch('LoseScreen');
+                });
             }
         }
 
@@ -701,31 +838,99 @@
             if (this.handlePointerUp) this.input.off('pointerup', this.handlePointerUp, this);
             if (this.handlePointerDown) this.input.off('pointerdown', this.handlePointerDown, this);
         }
-
-        endGame() {
-            this.scene.pause();
-            this.scene.launch('GameOver');
-        }
     }
 
     class LoseScreen extends Phaser.Scene {
-        constructor() {
-            super('LoseScreen');
-        }
+        constructor() { super('LoseScreen'); }
 
         create() {
-            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x000000).setOrigin(0).setAlpha(0.7);
-            this.add.text(this.cameras.main.width / 2, this.cameras.main.height / 2 - 50, 'You Lost!', {
-                font: '64px Comic Sans MS',
-                fill: '#ff0000',
-                stroke: '#000',
-                strokeThickness: 8,
-            }).setOrigin(0.5);
+            const W = this.cameras.main.width;
+            const H = this.cameras.main.height;
 
-            sfx.cheer(); // Play losing sound effect
+            // Dark stormy background
+            const bg = this.add.rectangle(0, 0, W, H, 0x110022).setOrigin(0).setAlpha(0);
+            this.tweens.add({ targets: bg, alpha: 0.93, duration: 500 });
 
-            this.time.delayedCall(5000, () => {
-                this.cameras.main.fadeOut(1000, 0, 0, 0, () => {
+            // Rain drops
+            for (let i = 0; i < 40; i++) {
+                const drop = this.add.rectangle(
+                    Phaser.Math.Between(0, W),
+                    Phaser.Math.Between(-H, 0),
+                    2, Phaser.Math.Between(12, 28),
+                    0x4488ff, 0.55
+                ).setDepth(5);
+                this.tweens.add({
+                    targets: drop, y: H + 40,
+                    duration: Phaser.Math.Between(700, 1600),
+                    delay: Phaser.Math.Between(0, 1400),
+                    repeat: -1, ease: 'Linear',
+                    onRepeat: () => { drop.x = Phaser.Math.Between(0, W); drop.y = -30; }
+                });
+            }
+
+            // YOU LOST text - slams down from top
+            const loseText = this.add.text(W / 2, -100, 'YOU LOST!', {
+                fontFamily: 'Comic Sans MS, cursive',
+                fontSize: '88px',
+                color: '#ff2222',
+                stroke: '#000000',
+                strokeThickness: 10,
+                shadow: { offsetX: 4, offsetY: 6, color: '#440000', blur: 8, fill: true }
+            }).setOrigin(0.5).setDepth(20);
+
+            this.tweens.add({
+                targets: loseText, y: H / 2 - 90,
+                duration: 520, ease: 'Bounce.easeOut',
+                onComplete: () => {
+                    this.tweens.add({ targets: loseText, x: W / 2 - 10, duration: 55, yoyo: true, repeat: 6 });
+                }
+            });
+
+            // Subtitle fades in
+            const sub = this.add.text(W / 2, H / 2 + 5, 'The boss soaked you... try again!', {
+                fontFamily: 'Comic Sans MS, cursive',
+                fontSize: '28px', color: '#aaaaff',
+                stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5).setAlpha(0).setDepth(20);
+            this.tweens.add({ targets: sub, alpha: 1, duration: 600, delay: 750 });
+
+            // Soaked player dripping graphic
+            const soak = this.add.graphics().setDepth(10);
+            soak.fillStyle(0x5577ff, 0.85);
+            soak.fillCircle(W / 2, H / 2 + 110, 28); // head
+            soak.fillRoundedRect(W / 2 - 22, H / 2 + 135, 44, 32, 8); // body
+            soak.lineStyle(3, 0x00aaff, 0.9);
+            for (let d = 0; d < 6; d++) {
+                soak.lineBetween(W / 2 - 20 + d * 9, H / 2 + 167, W / 2 - 22 + d * 10, H / 2 + 190);
+            }
+            this.tweens.add({ targets: soak, y: 8, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+            // Sad emojis float up
+            const sadEmojis = ['\ud83d\udca7', '\ud83d\ude22', '\ud83c\udf27\ufe0f', '\ud83d\udca6', '\ud83d\ude2d'];
+            for (let i = 0; i < 14; i++) {
+                const em = this.add.text(
+                    Phaser.Math.Between(30, W - 30),
+                    Phaser.Math.Between(H * 0.55, H - 30),
+                    Phaser.Utils.Array.GetRandom(sadEmojis),
+                    { fontSize: `${Phaser.Math.Between(22, 40)}px` }
+                ).setAlpha(0).setDepth(15);
+                this.tweens.add({
+                    targets: em, alpha: 0.9, y: em.y - 40,
+                    duration: 700, delay: Phaser.Math.Between(200, 2000),
+                    yoyo: true, repeat: 2,
+                    onComplete: () => em.destroy()
+                });
+            }
+
+            // Double splash sound for sad soaked effect
+            sfx.splash();
+            this.time.delayedCall(350, () => sfx.splash());
+
+            // Fade out and return to menu after 6 seconds
+            this.time.delayedCall(6000, () => {
+                this.cameras.main.fadeOut(1200, 0, 0, 0);
+                this.cameras.main.once('camerafadeoutcomplete', () => {
+                    this.scene.stop('Game');
                     this.scene.start('MainMenu');
                 });
             });
@@ -738,18 +943,190 @@
         }
 
         create() {
-            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x000000).setOrigin(0).setAlpha(0.7);
-            this.add.text(this.cameras.main.width / 2, this.cameras.main.height / 2 - 50, 'You Won!', {
-                font: '64px Comic Sans MS',
-                fill: '#00ff00',
-                stroke: '#000',
-                strokeThickness: 8,
-            }).setOrigin(0.5);
+            const W = this.cameras.main.width;
+            const H = this.cameras.main.height;
 
-            sfx.cheer(); // Play winning sound effect
+            // Colorful festive background
+            const bg = this.add.rectangle(0, 0, W, H, 0x000055).setOrigin(0).setAlpha(0);
+            this.tweens.add({ targets: bg, alpha: 0.85, duration: 400 });
 
-            this.time.delayedCall(5000, () => {
-                this.cameras.main.fadeOut(1000, 0, 0, 0, () => {
+            // Play cheer sound
+            sfx.cheer();
+
+            // --- BIG BALLOON RUSHING TOWARD CAMERA ---
+            const balloonColors = [0xff2244, 0xff9900, 0x00ccff, 0xff00cc, 0x44ff44, 0xffff00];
+            const bigBalloonColor = Phaser.Utils.Array.GetRandom(balloonColors);
+
+            // Balloon body (circle)
+            const bigBalloon = this.add.graphics().setDepth(50);
+            bigBalloon.fillStyle(bigBalloonColor, 1);
+            bigBalloon.fillCircle(0, 0, 40);
+            bigBalloon.fillStyle(0xffffff, 0.35);
+            bigBalloon.fillCircle(-12, -14, 14); // shine
+            bigBalloon.setPosition(W / 2, H / 2);
+            bigBalloon.setScale(0.2);
+
+            // String
+            const string = this.add.graphics().setDepth(49);
+            string.lineStyle(2, 0xaaaaaa, 0.8);
+            string.lineBetween(0, 0, 0, 30);
+            string.setPosition(W / 2, H / 2);
+            string.setScale(0.2);
+
+            // Rush toward camera (scale up fast)
+            this.tweens.add({
+                targets: [bigBalloon, string],
+                scaleX: 20,
+                scaleY: 20,
+                duration: 900,
+                ease: 'Cubic.easeIn',
+                onComplete: () => {
+                    // SPLASH BURST on impact
+                    bigBalloon.destroy();
+                    string.destroy();
+                    const splashColors = [0x00ccff, 0x0099ff, 0x33ddff, 0xaaeeff];
+                    for (let i = 0; i < 40; i++) {
+                        const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+                        const dist = Phaser.Math.Between(60, 320);
+                        const drop = this.add.circle(
+                            W / 2 + Math.cos(angle) * 10,
+                            H / 2 + Math.sin(angle) * 10,
+                            Phaser.Math.Between(5, 18),
+                            Phaser.Utils.Array.GetRandom(splashColors)
+                        ).setDepth(51).setAlpha(0.9);
+                        this.tweens.add({
+                            targets: drop,
+                            x: W / 2 + Math.cos(angle) * dist,
+                            y: H / 2 + Math.sin(angle) * dist + Phaser.Math.Between(30, 100),
+                            alpha: 0,
+                            scaleX: 0.2,
+                            scaleY: 0.2,
+                            duration: Phaser.Math.Between(400, 900),
+                            ease: 'Power2',
+                            onComplete: () => drop.destroy()
+                        });
+                    }
+
+                    // Screen flash
+                    const flash = this.add.rectangle(0, 0, W, H, 0xffffff).setOrigin(0).setAlpha(0.8).setDepth(60);
+                    this.tweens.add({ targets: flash, alpha: 0, duration: 350, onComplete: () => flash.destroy() });
+
+                    // Show YOU WIN! text after splash
+                    this.time.delayedCall(200, () => this.showYouWin(W, H));
+                }
+            });
+        }
+
+        showYouWin(W, H) {
+            const balloonColors = [0xff2244, 0xff9900, 0x00ccff, 0xff00cc, 0x44ff44, 0xffff00];
+
+            // --- YOU WIN! text ---
+            const winText = this.add.text(W / 2, H / 2 - 20, 'YOU WIN!', {
+                fontFamily: 'Comic Sans MS, cursive',
+                fontSize: '96px',
+                color: '#FFD700',
+                stroke: '#cc0000',
+                strokeThickness: 12,
+                shadow: { offsetX: 4, offsetY: 4, color: '#000', blur: 6, fill: true }
+            }).setOrigin(0.5).setAlpha(0).setScale(0.3).setDepth(100);
+
+            this.tweens.add({
+                targets: winText,
+                alpha: 1,
+                scaleX: 1,
+                scaleY: 1,
+                duration: 600,
+                ease: 'Back.easeOut'
+            });
+
+            // Pulsing rainbow color cycle on the text
+            const textColors = ['#FFD700', '#ff4488', '#00ffcc', '#ff8800', '#aaffff', '#ff44ff'];
+            let colorIdx = 0;
+            this.time.addEvent({
+                delay: 300,
+                repeat: 20,
+                callback: () => {
+                    colorIdx = (colorIdx + 1) % textColors.length;
+                    winText.setColor(textColors[colorIdx]);
+                }
+            });
+
+            // Bounce animation
+            this.tweens.add({
+                targets: winText,
+                y: H / 2 - 35,
+                duration: 700,
+                yoyo: true,
+                repeat: -1,
+                ease: 'Sine.easeInOut',
+                delay: 600
+            });
+
+            // --- SCATTERED BALLOONS floating up ---
+            for (let i = 0; i < 24; i++) {
+                const x = Phaser.Math.Between(30, W - 30);
+                const startY = Phaser.Math.Between(H * 0.5, H + 60);
+                const color = Phaser.Utils.Array.GetRandom(balloonColors);
+                const size = Phaser.Math.Between(16, 38);
+                const delay = i * 180;
+
+                const gfx = this.add.graphics().setDepth(80);
+                gfx.fillStyle(color, 1);
+                gfx.fillCircle(0, 0, size);
+                gfx.fillStyle(0xffffff, 0.3);
+                gfx.fillCircle(-size * 0.3, -size * 0.35, size * 0.35);
+                gfx.lineStyle(1.5, 0x888888, 0.7);
+                gfx.lineBetween(0, size, Phaser.Math.Between(-8, 8), size + 22);
+                gfx.setPosition(x, startY);
+
+                this.tweens.add({
+                    targets: gfx,
+                    y: startY - Phaser.Math.Between(300, H + 80),
+                    x: x + Phaser.Math.Between(-60, 60),
+                    alpha: { from: 0, to: 1 },
+                    duration: Phaser.Math.Between(3500, 6500),
+                    delay: delay,
+                    ease: 'Sine.easeInOut',
+                    onComplete: () => gfx.destroy()
+                });
+
+                // Gentle sway
+                this.tweens.add({
+                    targets: gfx,
+                    angle: Phaser.Math.Between(-15, 15),
+                    duration: Phaser.Math.Between(600, 1200),
+                    yoyo: true,
+                    repeat: -1,
+                    ease: 'Sine.easeInOut',
+                    delay: delay
+                });
+            }
+
+            // Stars / sparkles
+            for (let i = 0; i < 30; i++) {
+                const star = this.add.text(
+                    Phaser.Math.Between(20, W - 20),
+                    Phaser.Math.Between(20, H - 20),
+                    Phaser.Utils.Array.GetRandom(['⭐', '✨', '💧', '🎉', '🌈']),
+                    { fontSize: `${Phaser.Math.Between(18, 40)}px` }
+                ).setAlpha(0).setDepth(90);
+
+                this.tweens.add({
+                    targets: star,
+                    alpha: 1,
+                    duration: 400,
+                    delay: Phaser.Math.Between(200, 2500),
+                    yoyo: true,
+                    repeat: 3,
+                    onComplete: () => star.destroy()
+                });
+            }
+
+            // --- FADE OUT + BACK TO MENU after 7 seconds ---
+            this.time.delayedCall(7000, () => {
+                this.cameras.main.fadeOut(1500, 0, 0, 0);
+                this.cameras.main.once('camerafadeoutcomplete', () => {
+                    this.scene.stop('Game');
                     this.scene.start('MainMenu');
                 });
             });

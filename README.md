@@ -7,7 +7,7 @@ Dive into the fun with Water Balloon Battle, a simple browser game where you can
 - Touch screen compatible
 
 ## AI Use Disclosure
-AI (Gemini by Google) was used in creating sound effects, characters, background images
+AI (Gemini by Google) was used in creating sound effects, characters, background images, and some debugging
 
 ## License
 
