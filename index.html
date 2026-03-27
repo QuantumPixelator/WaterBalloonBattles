@@ -3,19 +3,19 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Water Balloon Battle</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
         body { 
             margin: 0; padding: 0; background-color: #111; 
             display: flex; justify-content: center; align-items: center; 
-            height: 100vh; overflow: hidden; font-family: 'Comic Sans MS', sans-serif; 
+            width: 100vw; height: 100vh; overflow: hidden; font-family: 'Comic Sans MS', sans-serif; 
             touch-action: none; user-select: none; -webkit-user-select: none;
         }
         canvas { 
             display: block; box-shadow: 0 0 30px rgba(100, 200, 255, 0.4); 
-            border-radius: 10px; touch-action: none; 
+            border-radius: 0px; touch-action: none; 
         }
     </style>
 </head>
@@ -143,27 +143,30 @@
         constructor() { super('MainMenu'); }
         create() {
             dataManager.loadSettings();
-            this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x1a003c).setOrigin(0);
+            const W = this.scale.width;
+            const H = this.scale.height;
+            this.add.rectangle(0, 0, W, H, 0x1a003c).setOrigin(0);
             
             // Draw a vibrant background grid pattern
             const g = this.add.graphics();
             g.lineStyle(2, 0x4a008c, 0.5);
-            for(let i=0; i<800; i+=40) { g.moveTo(i,0); g.lineTo(i,600); g.moveTo(0,i); g.lineTo(800,i); }
+            for(let i=0; i<W; i+=40) { g.moveTo(i,0); g.lineTo(i,H); }
+            for(let i=0; i<H; i+=40) { g.moveTo(0,i); g.lineTo(W,i); }
             g.strokePath();
 
             // Animated Title
-            const title = this.add.text(this.cameras.main.width/2, 150, 'Water Balloon\nBattle!', { 
+            const title = this.add.text(W/2, H * 0.25, 'Water Balloon\nBattle!', { 
                 font: '64px Comic Sans MS', fill: '#00ffff', align: 'center', stroke: '#000088', strokeThickness: 8 
             }).setOrigin(0.5);
             this.tweens.add({
-                targets: title, y: 140, angle: 2, duration: 2000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+                targets: title, y: (H * 0.25) - 10, angle: 2, duration: 2000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
             });
             this.tweens.add({
                 targets: title, angle: -2, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
             });
 
             // Play Button
-            const playBtn = this.add.text(this.cameras.main.width/2, 350, ' PLAY NOW ', { 
+            const playBtn = this.add.text(W/2, H * 0.55, ' PLAY NOW ', { 
                 font: '48px Comic Sans MS', fill: '#fff', backgroundColor: '#ff00aa', padding: {x:20,y:10}, stroke: '#fff', strokeThickness: 4 
             }).setOrigin(0.5).setInteractive({ useHandCursor: true });
             
@@ -172,7 +175,7 @@
             playBtn.on('pointerout', () => this.tweens.add({targets: playBtn, scale: 1, duration: 100}));
 
             // Options Button
-            const optBtn = this.add.text(this.cameras.main.width/2, 430, ' OPTIONS ', { 
+            const optBtn = this.add.text(W/2, H * 0.72, ' OPTIONS ', { 
                 font: '40px Comic Sans MS', fill: '#fff', backgroundColor: '#0099ff', padding: {x:20,y:10}, stroke: '#fff', strokeThickness: 4 
             }).setOrigin(0.5).setInteractive({ useHandCursor: true });
             
@@ -181,7 +184,7 @@
             optBtn.on('pointerout', () => this.tweens.add({targets: optBtn, scale: 1, duration: 100}));
 
             // High Score
-            this.add.text(this.cameras.main.width-20, 20, `Stars: ✨${dataManager.getStars()}`, { 
+            this.add.text(W-20, 20, `Stars: ✨${dataManager.getStars()}`, { 
                 font: '32px Comic Sans MS', fill: '#FFD700', stroke: '#000', strokeThickness: 4
             }).setOrigin(1, 0);
 
@@ -461,32 +464,37 @@
             this.cursors = this.input.keyboard.createCursorKeys();
             this.wasd = this.input.keyboard.addKeys('W,A,S,D');
 
-            // Virtual Joystick for Mobile Control
-            this.joyBase = this.add.circle(120, 480, 80, 0x000000, 0.3).setInteractive().setDepth(100).setScrollFactor(0);
-            this.joyThumb = this.add.circle(120, 480, 40, 0xffffff, 0.7).setDepth(101).setScrollFactor(0);
-            this.joyVector = new Phaser.Math.Vector2(0,0);
-            this.joyPointer = null;
-
-            this.joyBase.on('pointerdown', (p) => { this.joyPointer = p; this.updateJoy(p); });
+            // Mobile Drag and Move Setup
+            this.isDragging = false;
+            this.player.setInteractive({ draggable: true });
             
-            this.handlePointerMove = (p) => { if(this.joyPointer && this.joyPointer.id === p.id) this.updateJoy(p); };
-            this.handlePointerUp = (p) => { 
-                if(this.joyPointer && this.joyPointer.id === p.id) { 
-                    this.joyPointer = null; 
-                    this.joyThumb.setPosition(120,480); 
-                    this.joyVector.reset(); 
+            this.player.on('dragstart', (pointer) => {
+                this.isDragging = true;
+                this.player.setScale(1.1); // Visual feedback
+            });
+
+            this.player.on('drag', (pointer, dragX, dragY) => {
+                // Keep player within bounds while dragging
+                this.player.x = Phaser.Math.Clamp(dragX, 30, this.scale.width - 30);
+                this.player.y = Phaser.Math.Clamp(dragY, 40, this.scale.height - 40);
+                // Update physics body to match visual position
+                this.player.body.reset(this.player.x, this.player.y);
+            });
+
+            this.player.on('dragend', (pointer) => {
+                this.isDragging = false;
+                this.player.setScale(1);
+            });
+
+            this.handlePointerDown = (p) => {
+                if(this.isPaused || this.gameEnded) return;
+                // Only throw if we aren't dragging the player
+                if(!this.isDragging) {
+                    this.throwBalloon(this.player, new Phaser.Math.Vector2(p.x, p.y));
+                    this.bob(this.player);
                 }
             };
-            this.handlePointerDown = (p) => {
-                if(this.isPaused) return;
-                if(this.joyPointer && this.joyPointer.id === p.id) return;
-                if(Phaser.Math.Distance.Between(this.joyBase.x, this.joyBase.y, p.x, p.y) < 100) return;
-                this.throwBalloon(this.player, new Phaser.Math.Vector2(p.x, p.y));
-                this.bob(this.player);
-            };
 
-            this.input.on('pointermove', this.handlePointerMove, this);
-            this.input.on('pointerup', this.handlePointerUp, this);
             this.input.on('pointerdown', this.handlePointerDown, this);
 
             // Pause button (top right)
@@ -500,16 +508,23 @@
 
             // HUD Elements
             const isBossLevel = this.levelConfig.isBoss;
-            const levelLabel = isBossLevel ? '\ud83d\udc51 BOSS!' : `Level ${this.currentLevel}/5`;
-            this.levelText = this.add.text(400, 20, levelLabel, {
+            const levelLabel = isBossLevel ? '👑 BOSS!' : `Level ${this.currentLevel}/5`;
+            this.levelText = this.add.text(this.scale.width/2, 20, levelLabel, {
                 font: '28px Comic Sans MS', fill: isBossLevel ? '#ff88ff' : '#FFD700',
                 stroke: '#000', strokeThickness: 4
             }).setOrigin(0.5, 0).setDepth(100);
             const soakTarget = isBossLevel ? '' : `0/${this.levelConfig.opponents}`;
             this.scoreText = this.add.text(20, 20, `Soaked: ${soakTarget}`, { font: '24px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setDepth(100);
-            this.livesText = this.add.text(20, 50, '\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f', { font: '20px Comic Sans MS' }).setDepth(100);
+            this.livesText = this.add.text(20, 50, '❤️❤️❤️❤️❤️', { font: '20px Comic Sans MS' }).setDepth(100);
             this.timeLeft = this.levelConfig.time;
-            this.timerText = this.add.text(760, 20, `Time: ${this.timeLeft}`, { font: '24px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(1, 0).setDepth(100);
+            const timerLabelPos = this.scale.width - 20;
+            this.timerText = this.add.text(timerLabelPos, 20, `Time: ${this.timeLeft}`, { font: '24px Comic Sans MS', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(1, 0).setDepth(100);
+
+            // Update Pause Button Position
+            pauseBtn.setPosition(this.scale.width - 20, 20); // Reuse pauseBtn if possible or reposition logic
+            // Note: pauseBtn was created earlier, let's ensure it's positioned correctly
+            pauseBtn.setX(this.scale.width - 20);
+            this.timerText.setX(this.scale.width - 130); // Move timer slightly left of pause button
 
             // Game Timer
             this.time.addEvent({ delay: 1000, loop: true, callback: () => {
@@ -525,14 +540,17 @@
             this.isPaused = true;
             this.physics.pause();
             
+            const W = this.scale.width;
+            const H = this.scale.height;
+
             // Semi-transparent overlay
-            let overlay = this.add.rectangle(400,300,800,600,0x000000,0.7).setDepth(2000);
+            let overlay = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.7).setDepth(2000);
             
             // Pause Text
-            this.add.text(400, 150, 'PAUSED', {font:'64px Comic Sans MS', fill:'#fff', stroke:'#000', strokeThickness:8}).setOrigin(0.5).setDepth(2001);
+            this.add.text(W/2, H/2 - 150, 'PAUSED', {font:'64px Comic Sans MS', fill:'#fff', stroke:'#000', strokeThickness:8}).setOrigin(0.5).setDepth(2001);
             
             // Resume Button
-            let resumeBtn = this.add.text(400, 280, ' RESUME ', {
+            let resumeBtn = this.add.text(W/2, H/2 - 20, ' RESUME ', {
                 font:'40px Comic Sans MS', fill:'#fff', backgroundColor:'#00aa00', padding: {x:20,y:10}, stroke:'#fff', strokeThickness:4
             }).setOrigin(0.5).setDepth(2001).setInteractive({useHandCursor:true});
             
@@ -547,7 +565,7 @@
             resumeBtn.on('pointerout', () => this.tweens.add({targets: resumeBtn, scale: 1, duration: 100}));
 
             // Menu Button
-            let menuBtn = this.add.text(400, 380, ' MENU ', {
+            let menuBtn = this.add.text(W/2, H/2 + 80, ' MENU ', {
                 font:'40px Comic Sans MS', fill:'#fff', backgroundColor:'#aa00ff', padding: {x:20,y:10}, stroke:'#fff', strokeThickness:4
             }).setOrigin(0.5).setDepth(2001).setInteractive({useHandCursor:true});
             
@@ -570,20 +588,26 @@
         }
 
         update() {
-            if(this.isPaused) return;
+            if(this.isPaused || this.gameEnded) return;
 
-            // Process Input (Keyboard + Joystick combination)
-            let iv = new Phaser.Math.Vector2(this.joyVector.x, this.joyVector.y);
+            // Process Keyboard Movement (Joystick logic removed)
+            let iv = new Phaser.Math.Vector2(0, 0);
             if(this.cursors.left.isDown || this.wasd.A.isDown) iv.x = -1;
             if(this.cursors.right.isDown || this.wasd.D.isDown) iv.x = 1;
             if(this.cursors.up.isDown || this.wasd.W.isDown) iv.y = -1;
             if(this.cursors.down.isDown || this.wasd.S.isDown) iv.y = 1;
             
             if(iv.lengthSq() > 1) iv.normalize();
-            this.player.setVelocity(iv.x * 250, iv.y * 250);
+            
+            // Only apply keyboard velocity if not dragging
+            if (!this.isDragging) {
+                this.player.setVelocity(iv.x * 250, iv.y * 250);
+            } else {
+                this.player.setVelocity(0, 0);
+            }
 
-            // Animate Player Wobble
-            if(iv.lengthSq() > 0) {
+            // Animate Player Wobble or Rotation
+            if(iv.lengthSq() > 0 || (this.isDragging && !this.player.body.speed === 0)) {
                 this.player.angle = Math.sin(this.time.now / 100) * 10;
             } else {
                 this.player.angle = 0;
@@ -627,7 +651,7 @@
                 // Boss HP bar
                 this.bossHpBg  = this.add.rectangle(400, 578, 304, 22, 0x330033).setDepth(100).setOrigin(0.5);
                 this.bossHpBar = this.add.rectangle(250, 578, 300, 18, 0xff00ff).setDepth(101).setOrigin(0, 0.5);
-                this.bossLabel = this.add.text(400, 556, '\ud83d\udc51 FINAL BOSS', { font: '16px Comic Sans MS', fill: '#ff88ff', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5).setDepth(101);
+                this.bossLabel = this.add.text(400, 556, '👑 FINAL BOSS', { font: '16px Comic Sans MS', fill: '#ff88ff', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5).setDepth(101);
             } else {
                 for (let i = 0; i < cfg.opponents; i++) {
                     let op = this.physics.add.sprite(
@@ -647,8 +671,8 @@
         }
 
         showLevelComplete() {
-            const W = this.cameras.main.width;
-            const H = this.cameras.main.height;
+            const W = this.scale.width;
+            const H = this.scale.height;
             sfx.cheer();
 
             this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.65).setDepth(3000);
@@ -660,7 +684,7 @@
             this.tweens.add({ targets: banner, alpha: 1, scaleX: 1, scaleY: 1, duration: 500, ease: 'Back.easeOut' });
 
             const nextLevel = this.currentLevel + 1;
-            const nextMsg = nextLevel === 6 ? '\ud83d\udc51  Next: FINAL BOSS!' : `Next: Level ${nextLevel}/5`;
+            const nextMsg = nextLevel === 6 ? '👑  Next: FINAL BOSS!' : `Next: Level ${nextLevel}/5`;
             const sub = this.add.text(W/2, H/2 + 55, nextMsg, {
                 fontFamily: 'Comic Sans MS', fontSize: '30px',
                 color: nextLevel === 6 ? '#ff88ff' : '#ffffff',
@@ -722,7 +746,7 @@
 
         throwBalloon(thrower, target, isOpponent) {
             if (!thrower || thrower.getData('soaked')) return;
-            if (thrower.x < 0 || thrower.x > this.cameras.main.width || thrower.y < 0 || thrower.y > this.cameras.main.height) return;
+            if (thrower.x < 0 || thrower.x > this.scale.width || thrower.y < 0 || thrower.y > this.scale.height) return;
             const balloon = this.balloons.get(thrower.x, thrower.y, 'balloon');
             if (balloon) {
                 balloon.setActive(true).setVisible(true);
@@ -755,7 +779,7 @@
                 });
                 this.playerSoakedCount++;
                 const livesLeft = Math.max(0, 5 - this.playerSoakedCount);
-                this.livesText.setText(livesLeft > 0 ? '\u2764\ufe0f'.repeat(livesLeft) : '\ud83d\udc80');
+                this.livesText.setText(livesLeft > 0 ? '❤️'.repeat(livesLeft) : '💀');
                 if (this.playerSoakedCount >= 5) this.endGame(false);
             }
         }
@@ -834,8 +858,6 @@
 
         // Cleanup handlers when scene shuts down
         shutdown() {
-            if (this.handlePointerMove) this.input.off('pointermove', this.handlePointerMove, this);
-            if (this.handlePointerUp) this.input.off('pointerup', this.handlePointerUp, this);
             if (this.handlePointerDown) this.input.off('pointerdown', this.handlePointerDown, this);
         }
     }
@@ -1135,9 +1157,13 @@
 
     const config = {
         type: Phaser.AUTO, 
-        width: 800, 
-        height: 600,
-        scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+        scale: {
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            width: 800,
+            height: 600,
+            parent: document.body,
+        },
         physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
         scene: [Preloader, MainMenu, Options, Game, LoseScreen, WinScreen],
     };
