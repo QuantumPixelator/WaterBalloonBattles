@@ -7,19 +7,76 @@
     <title>Water Balloon Battle</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
-        body { 
-            margin: 0; padding: 0; background-color: #111; 
-            display: flex; justify-content: center; align-items: center; 
-            width: 100vw; height: 100vh; overflow: hidden; font-family: 'Comic Sans MS', sans-serif; 
-            touch-action: none; user-select: none; -webkit-user-select: none;
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            min-height: 100vh;
+            background: #111;
+            font-family: 'Comic Sans MS', sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            overflow: hidden;
         }
-        canvas { 
-            display: block; box-shadow: 0 0 30px rgba(100, 200, 255, 0.4); 
-            border-radius: 0px; touch-action: none; 
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: center;
+            min-height: 100vh;
+            width: 100vw;
+        }
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            max-width: 100vw;
+            max-height: 100vh;
+            box-shadow: 0 0 30px rgba(100, 200, 255, 0.4);
+            border-radius: 0px;
+            touch-action: none;
+        }
+
+        /* Tablet styles */
+        @media (min-width: 600px) {
+            #game-container {
+                width: 90vw;
+                height: 90vh;
+            }
+            canvas {
+                width: 90vw;
+                height: 90vh;
+                max-width: 900px;
+                max-height: 700px;
+            }
+        }
+
+        /* Desktop styles */
+        @media (min-width: 1024px) {
+            #game-container {
+                width: 800px;
+                height: 600px;
+            }
+            canvas {
+                width: 800px;
+                height: 600px;
+                max-width: 100vw;
+                max-height: 100vh;
+            }
         }
     </style>
 </head>
 <body>
+    <div id="game-container"></div>
 <script>
     // Set up the audio context for playing sounds
     let audioCtx = null;
@@ -1155,21 +1212,44 @@
         }
     }
 
+    function getGameSize() {
+        // Mobile first: full viewport
+        let w = window.innerWidth;
+        let h = window.innerHeight;
+        // Tablet
+        if (w >= 600 && w < 1024) {
+            w = Math.min(w, 900);
+            h = Math.min(h, 700);
+        }
+        // Desktop
+        if (w >= 1024) {
+            w = 800;
+            h = 600;
+        }
+        return { width: w, height: h };
+    }
+
+    const size = getGameSize();
     const config = {
-        type: Phaser.AUTO, 
+        type: Phaser.AUTO,
         scale: {
             mode: Phaser.Scale.FIT,
             autoCenter: Phaser.Scale.CENTER_BOTH,
-            width: 800,
-            height: 600,
-            parent: document.body,
+            width: size.width,
+            height: size.height,
+            parent: 'game-container',
         },
         physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
         scene: [Preloader, MainMenu, Options, Game, LoseScreen, WinScreen],
     };
-    
+
     // Boot the game
     const game = new Phaser.Game(config);
+
+    window.addEventListener('resize', () => {
+        const newSize = getGameSize();
+        game.scale.resize(newSize.width, newSize.height);
+    });
 </script>
 </body>
 </html>
